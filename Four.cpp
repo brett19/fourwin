@@ -134,7 +134,7 @@ namespace js {
 				data()->_data.resize(dataLen);
 				uint8_t *dataBuf = (uint8_t*)dataObj->Buffer()->BaseAddress();
 				dataBuf += dataObj->ByteOffset();
-				memcpy(dataBuf, &data()->_data[0], dataLen);
+				memcpy(&data()->_data[0], dataBuf, dataLen);
 				data()->_itemSize = handle()->Get(NavNew("itemSize"))->Int32Value();
 				if (dataObj->IsFloat32Array()) {
 					data()->_itemType = gfx::BufferType::Float;
@@ -171,17 +171,17 @@ namespace js {
 				printf("^Object3d\n");
 
 				NavSetObjVal(args.This(), "name", NavNew<String>());
-				position.Bind(args.This(), "position", data()->_position, std::bind(&Object3d::transformChanged, this));
-				quaternion.Bind(args.This(), "quaternion", data()->_rotation, std::bind(&Object3d::transformChanged, this));
-				scale.Bind(args.This(), "scale", data()->_scale, std::bind(&Object3d::transformChanged, this));
+				_position.Bind(args.This(), "position", data()->_position, std::bind(&Object3d::transformChanged, this));
+				_quaternion.Bind(args.This(), "quaternion", data()->_rotation, std::bind(&Object3d::transformChanged, this));
+				_scale.Bind(args.This(), "scale", data()->_scale, std::bind(&Object3d::transformChanged, this));
 			}
 
 			void transformChanged() {
 				data()->_transformNeedsUpdate = true;
 			}
-			Vector3Binder position;
-			QuaternionBinder quaternion;
-			Vector3Binder scale;
+			Vector3Binder _position;
+			QuaternionBinder _quaternion;
+			Vector3Binder _scale;
 
 			void add(const v8::FunctionCallbackInfo<v8::Value>& args) {
 				if (args.Length() < 1) {
@@ -204,8 +204,6 @@ namespace js {
 
 				args.GetReturnValue().Set(args.This());
 			}
-
-			math::Vector3 _position;
 
 		};
 
@@ -262,6 +260,55 @@ namespace js {
 
 			void constructor(const v8::FunctionCallbackInfo<v8::Value>& args) {
 				printf("^Shader\n");
+				if (args.Length() < 1) {
+					return;
+				}
+
+				Handle<Object> optsObj = args[0].As<Object>();
+
+				Handle<Value> vertexVal = optsObj->Get(NavNew("vertex"));
+				if (!vertexVal.IsEmpty()) {
+					String::Utf8Value vertexStr(vertexVal);
+					data()->vertexSrc = *vertexStr;
+				}
+
+				Handle<Value> fragmentVal = optsObj->Get(NavNew("fragment"));
+				if (!fragmentVal.IsEmpty()) {
+					String::Utf8Value fragmentStr(fragmentVal);
+					data()->fragmentSrc = *fragmentStr;
+				}
+
+				Handle<Value> uniformsVal = optsObj->Get(NavNew("uniforms"));
+				if (!uniformsVal.IsEmpty() && uniformsVal->IsObject()) {
+					Handle<Object> uniformsObj = uniformsVal.As<Object>();
+					Handle<Array> uniformsKeys = uniformsObj->GetOwnPropertyNames();
+					for (size_t i = 0; i < uniformsKeys->Length(); ++i) {
+						Handle<Value> uniformNameVal = uniformsKeys->Get(i);
+						String::Utf8Value uniformName(uniformNameVal);
+						int32_t uniformVal = uniformsObj->Get(uniformNameVal)->Int32Value();
+						gfx::Shader::Uniform uniform;
+						uniform.name = *uniformName;
+						uniform.type = (gfx::UniformType)uniformVal;
+						data()->uniforms.emplace_back(uniform);
+					}
+				}
+
+				Handle<Value> attributesVal = optsObj->Get(NavNew("attributes"));
+				if (!attributesVal.IsEmpty() && attributesVal->IsObject()) {
+					Handle<Object> attributesObj = attributesVal.As<Object>();
+					Handle<Array> attributesKeys = attributesObj->GetOwnPropertyNames();
+					for (size_t i = 0; i < attributesKeys->Length(); ++i) {
+						Handle<Value> attributeNameVal = attributesKeys->Get(i);
+						String::Utf8Value attributeName(attributeNameVal);
+						int32_t attributeVal = attributesObj->Get(attributeNameVal)->Int32Value();
+						gfx::Shader::Attribute attribute;
+						attribute.name = *attributeName;
+						attribute.type = (gfx::AttributeType)attributeVal;
+						data()->attributes.emplace_back(attribute);
+					}
+				}
+
+				data()->initVars();
 			}
 
 		};
@@ -275,7 +322,21 @@ namespace js {
 
 			void constructor(const v8::FunctionCallbackInfo<v8::Value>& args) {
 				printf("^ShaderMaterial\n");
+				if (args.Length() < 1) {
+					return;
+				}
+
+				Shader* shader = NavUnwrap<Shader>(args[0]);
+
+				data()->_shader = shader->data();
+
+				_transparentBind.Bind(args.This(), "transparent", &data()->_transparent);
+				_depthWriteBind.Bind(args.This(), "depthWrite", &data()->_depthWrite);
+				_depthTestBind.Bind(args.This(), "depthTest", &data()->_depthTest);
 			}
+			BoolBinder _transparentBind;
+			BoolBinder _depthWriteBind;
+			BoolBinder _depthTestBind;
 
 		};
 
@@ -343,7 +404,7 @@ namespace js {
 				}
 
 				BufferGeometry *geometry = NavObject::Unwrap<BufferGeometry>(args[0].As<Object>());
-				ShaderMaterial *material = NavObject::Unwrap<ShaderMaterial>(args[0].As<Object>());
+				ShaderMaterial *material = NavObject::Unwrap<ShaderMaterial>(args[1].As<Object>());
 				data()->setGeometry(geometry->data());
 				data()->setMaterial(material->data());
 			}
@@ -405,8 +466,36 @@ namespace js {
 			}
 		};
 
+		void InitConstants(Handle<Object> targetObj) {
+			Local<Object> valueObj;
+			
+			valueObj = NavNew<Object>();
+			NavSetObjEnumVal(valueObj, "Front", gfx::Side::Front);
+			NavSetObjEnumVal(valueObj, "Back", gfx::Side::Back);
+			NavSetObjEnumVal(valueObj, "Double", gfx::Side::Double);
+			NavSetObjVal(targetObj, "Side", valueObj);
+
+			valueObj = NavNew<Object>();
+			NavSetObjEnumVal(valueObj, "Sampler2d", gfx::UniformType::Sampler2d);
+			NavSetObjEnumVal(valueObj, "Vector4", gfx::UniformType::Vector4);
+			NavSetObjEnumVal(valueObj, "Vector3", gfx::UniformType::Vector3);
+			NavSetObjEnumVal(valueObj, "Vector2", gfx::UniformType::Vector2);
+			NavSetObjEnumVal(valueObj, "Matrix3", gfx::UniformType::Matrix3);
+			NavSetObjEnumVal(valueObj, "Matrix4", gfx::UniformType::Matrix4);
+			NavSetObjEnumVal(valueObj, "MatrixModelView", gfx::UniformType::MatrixModelView);
+			NavSetObjEnumVal(valueObj, "MatrixProjection", gfx::UniformType::MatrixProjection);
+			NavSetObjVal(targetObj, "UniformType", valueObj);
+
+			valueObj = NavNew<Object>();
+			NavSetObjEnumVal(valueObj, "Vector4", gfx::AttributeType::Vector4);
+			NavSetObjEnumVal(valueObj, "Vector3", gfx::AttributeType::Vector3);
+			NavSetObjEnumVal(valueObj, "Vector2", gfx::AttributeType::Vector2);
+			NavSetObjVal(targetObj, "AttributeType", valueObj);
+		}
+
 		void Init(Handle<Object> targetObj) {
-			Local<Object> fourObj = Object::New(gIsolate);
+			Local<Object> fourObj = NavNew<Object>();
+			InitConstants(fourObj);
 			NavObjectWrap<BufferAttribute>::Init(fourObj, "BufferAttribute");
 			NavObjectWrap<BufferGeometry>::Init(fourObj, "BufferGeometry");
 			NavObjectWrap<Shader>::Init(fourObj, "Shader"); 

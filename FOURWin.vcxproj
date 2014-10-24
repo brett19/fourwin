@@ -40,7 +40,7 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <LinkIncremental>true</LinkIncremental>
-    <IncludePath>deps\powervr-gles\include;deps\v8\include;deps\v8;$(IncludePath)</IncludePath>
+    <IncludePath>deps\powervr-gles\include;deps\v8\include;deps\v8;deps\eigen;$(IncludePath)</IncludePath>
     <LibraryPath>deps\powervr-gles\win-x86;deps\v8\build\win-x86-debug;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -85,9 +85,6 @@
       </IgnoreSpecificDefaultLibraries>
     </Link>
   </ItemDefinitionGroup>
-  <ItemGroup>
-    <Text Include="ReadMe.txt" />
-  </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Four.h" />
     <ClInclude Include="gfx.h" />

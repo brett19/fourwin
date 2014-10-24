@@ -23,6 +23,12 @@ FOUR.Vector3 = function Vector3() {
     this.z = 0;
 };
 
+FOUR.Vector3.prototype.set = function(x, y, z) {
+    this.x = x;
+    this.y = y;
+    this.z = z;
+};
+
 FOUR.Vector3.prototype.multiplyScalar = function (scale) {
     this.x *= scale;
     this.y *= scale;

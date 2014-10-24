@@ -8,7 +8,9 @@ namespace gfx {
 		Vector3,
 		Vector2,
 		Matrix3,
-		Matrix4
+		Matrix4,
+		MatrixModelView,
+		MatrixProjection
 	};
 
 	enum class AttributeType : uint32_t {
@@ -40,6 +42,12 @@ namespace gfx {
 		Float = GL_FLOAT
 	};
 
+	namespace Renderer {
+		math::Matrix4 projMatrix;
+		math::Affine3 viewMatrix;
+		math::Affine3 modelViewMatrix;
+	}
+
 	class Object3d {
 	public:
 		EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -54,20 +62,23 @@ namespace gfx {
 		std::vector<Object3d*> _children;
 
 		Object3d()
-			: _parent(nullptr), _scale(1,1,1) {
+			: _parent(nullptr) {
 			printf("gfx::^Object3d\n");
+			_position.setZero();
+			_rotation.setIdentity();
+			_scale.setOnes();
 		}
 
 		virtual ObjectType type() { return ObjectType::Object3d; }
 
 		inline void updateTransform() {
-			if (_transformNeedsUpdate) {
+			//if (_transformNeedsUpdate) {
 				_matrix.setIdentity();
 				_matrix.translate(_position);
 				_matrix.rotate(_rotation);
 				_matrix.scale(_scale);
 				_transformNeedsUpdate = false;
-			}
+			//}
 
 			if (_parent) {
 				_worldMatrix = _parent->_worldMatrix * _matrix;
@@ -112,6 +123,23 @@ namespace gfx {
 			printf("gfx::^BufferAttribute\n");
 		}
 
+		bool upload() {
+
+			_needsUpdate = false;
+			return true;
+		}
+		
+		bool bind(GLuint slot) {
+			if (_needsUpdate) {
+				if (!upload()) {
+					return false;
+				}
+			}
+
+			glVertexAttribPointer(slot, _itemSize, (GLenum)_itemType, GL_FALSE, 0, &_data[0]);
+			return true;
+		}
+
 		std::vector<uint8_t> _data;
 		int32_t _itemSize;
 		BufferType _itemType;
@@ -129,6 +157,15 @@ namespace gfx {
 
 	class Shader {
 	public:
+		enum class CompileState : uint32_t {
+			UNCOMPILED,
+			COMPILING,
+			COMPILED,
+			LINKING,
+			LINKED,
+			FAILED
+		};
+
 		struct Uniform {
 			std::string name;
 			UniformType type;
@@ -139,11 +176,245 @@ namespace gfx {
 			AttributeType type;
 		};
 
-		Shader() {
+		Shader()
+			: _compileState(CompileState::UNCOMPILED), 
+				_program(0), _vertexShader(0), _fragmentShader(0) {
 			printf("gfx::^ShaderMaterial\n");
 		}
 
-		std::string vertexSource;
+		void initVars() {
+			GLuint location = 0;
+			for (auto& i : attributes) {
+				GLuint attribLoc = location++;
+				_locations.emplace(i.name, AttributeBindInfo(attribLoc));
+			}
+
+			for (auto& i : uniforms) {
+				_uniformInfo.emplace(i.name, UniformBindInfo(i.type));
+			}
+		}
+
+		static GLuint _compileShader(const char* source, GLuint type) {
+			GLuint shader = glCreateShader(type);
+			if (shader == 0) {
+				return 0;
+			}
+
+			glShaderSource(shader, 1, &source, nullptr);
+
+			glCompileShader(shader);
+
+			return shader;
+		}
+
+		static bool _checkShader(GLuint shader) {
+			GLint compiled = 0;
+			glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+
+			if (!compiled) {
+				GLint infoLen = 0;
+				glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &infoLen);
+
+				if (infoLen > 0) {
+					char * infoLog = new char[infoLen];
+					glGetShaderInfoLog(shader, infoLen, NULL, infoLog);
+					printf("Shader Compile Failed:\n%s", infoLog);
+					delete[] infoLog;
+				}
+
+				return false;
+			}
+			return true;
+		}
+
+		bool compile() {
+			_vertexShader = _compileShader(vertexSrc.c_str(), GL_VERTEX_SHADER);
+			if (_vertexShader == 0) {
+				_compileState = CompileState::FAILED;
+				return false;
+			}
+
+			_fragmentShader = _compileShader(fragmentSrc.c_str(), GL_FRAGMENT_SHADER);
+			if (_fragmentShader == 0) {
+				_compileState = CompileState::FAILED;
+				return false;
+			}
+
+			_compileState = CompileState::COMPILING;
+			return true;
+		}
+
+		bool checkCompile() {
+			if (!_checkShader(_vertexShader)) {
+				_compileState = CompileState::FAILED;
+				return false;
+			}
+
+			if (!_checkShader(_fragmentShader)) {
+				_compileState = CompileState::FAILED;
+				return false;
+			}
+
+			_compileState = CompileState::COMPILED;
+			return true;
+		}
+
+		bool link() {
+			_program = glCreateProgram();
+			if (_program == 0) {
+				_compileState = CompileState::FAILED;
+				return false;
+			}
+
+			glAttachShader(_program, _vertexShader);
+			glAttachShader(_program, _fragmentShader);
+
+			for (auto& i : _locations) {
+				glBindAttribLocation(_program, i.second.location, i.first.c_str());
+			}
+
+			glLinkProgram(_program);
+
+			_compileState = CompileState::LINKING;
+			return true;
+		}
+
+		bool checkLink() {
+			GLint linked;
+			glGetProgramiv(_program, GL_LINK_STATUS, &linked);
+
+			if (!linked) {
+				GLint infoLen = 0;
+				glGetShaderiv(_program, GL_INFO_LOG_LENGTH, &infoLen);
+
+				if (infoLen > 0) {
+					char * infoLog = new char[infoLen];
+					glGetProgramInfoLog(_program, infoLen, NULL, infoLog);
+					printf("Shader Link Failed:\n%s", infoLog);
+					delete[] infoLog;
+				}
+
+				_compileState = CompileState::FAILED;
+				return false;
+			}
+
+			if (!bindVars()) {
+				_compileState = CompileState::FAILED;
+				return false;
+			}
+
+			_compileState = CompileState::LINKED;
+			return true;
+		}
+
+		bool bindVars() {
+			for (auto& i : _uniformInfo) {
+				GLint location = glGetUniformLocation(_program, i.first.c_str());
+				if (location == -1) {
+					return false;
+				}
+				i.second.location = location;
+			}
+			return true;
+		}
+
+		bool _bind() {
+			if (_compileState == CompileState::UNCOMPILED) {
+				compile();
+			}
+			if (_compileState == CompileState::COMPILING) {
+				checkCompile();
+			}
+			if (_compileState == CompileState::COMPILED) {
+				link();
+			}
+			if (_compileState == CompileState::LINKING) {
+				checkLink();
+			}
+			if (_compileState == CompileState::LINKED) {
+				glUseProgram(_program);
+
+				return true;
+			}
+
+			return false;
+		}
+
+		bool bind() {
+			return _bind();
+		}
+
+		bool bindFor(BufferGeometry* geom) {
+			if (_bind()) {
+				bool bindSuccess = true;
+				for (auto& i : _uniformInfo) {
+					const UniformBindInfo& bindInfo = i.second;
+					if (bindInfo.type == UniformType::Vector2) {
+						glUniform2fv(bindInfo.location, 1, (GLfloat*)bindInfo.data);
+					} else if (bindInfo.type == UniformType::Vector3) {
+						glUniform3fv(bindInfo.location, 1, (GLfloat*)bindInfo.data);
+					} else if (bindInfo.type == UniformType::Vector4) {
+						glUniform4fv(bindInfo.location, 1, (GLfloat*)bindInfo.data);
+					} else if (bindInfo.type == UniformType::Matrix3) {
+						glUniformMatrix3fv(bindInfo.location, 1, false, (GLfloat*)bindInfo.data);
+					} else if (bindInfo.type == UniformType::Matrix4) {
+						glUniformMatrix4fv(bindInfo.location, 1, false, (GLfloat*)bindInfo.data);
+					} else if (bindInfo.type == UniformType::MatrixProjection) {
+						glUniformMatrix4fv(bindInfo.location, 1, false, (GLfloat*)Renderer::projMatrix.data());
+					} else if (bindInfo.type == UniformType::MatrixModelView) {
+						glUniformMatrix4fv(bindInfo.location, 1, false, (GLfloat*)Renderer::modelViewMatrix.data());
+					} else {
+						printf("Encountered unknown uniform bind type.\n");
+						bindSuccess = false;
+						break;
+					}
+				}
+				if (bindSuccess) {
+					for (auto& i : geom->_attributes) {
+						BufferAttribute *attrib = i.second;
+
+						auto foundLoc = _locations.find(i.first);
+						if (foundLoc != _locations.end()) {
+							const AttributeBindInfo& bindInfo = foundLoc->second;
+
+							if (!attrib->bind(bindInfo.location)) {
+								bindSuccess = false;
+								break;
+							}
+							glEnableVertexAttribArray(bindInfo.location);
+						}
+					}
+				}
+				return bindSuccess;
+			}
+			return false;
+		}
+
+		struct AttributeBindInfo {
+			AttributeBindInfo(GLuint location_)
+				: location(location_) {}
+
+			GLuint location;
+		};
+		struct UniformBindInfo {
+			UniformBindInfo(UniformType type_)
+				: type(type_), location(0) {
+				memset(data, 0, sizeof(data));
+			}
+
+			GLuint location;
+			UniformType type;
+			uint8_t data[4 * 16];
+		};
+
+		CompileState _compileState;
+		GLuint _program;
+		GLuint _vertexShader;
+		GLuint _fragmentShader;
+		std::map<std::string, AttributeBindInfo> _locations;
+		std::map<std::string, UniformBindInfo> _uniformInfo;
+
+		std::string vertexSrc;
 		std::string fragmentSrc;
 		std::vector<Uniform> uniforms;
 		std::vector<Attribute> attributes;
@@ -154,6 +425,22 @@ namespace gfx {
 	public:
 		ShaderMaterial() {
 			printf("gfx::^ShaderMaterial\n");
+		}
+
+		void _bind() {
+			// TODO:  Fuck it.
+		}
+
+		bool bind() {
+			printf("ShaderMaterial::bind\n");
+			_bind();
+			return _shader->bind();
+		}
+
+		bool bindFor(BufferGeometry* geom) {
+			printf("ShaderMaterial::bindFor\n");
+			_bind();
+			return _shader->bindFor(geom);
 		}
 
 		Shader *_shader;
@@ -182,6 +469,12 @@ namespace gfx {
 
 		void setMaterial(ShaderMaterial *material) {
 			_material = material;
+		}
+
+		void render() {
+			if (_material->bindFor(_geometry)) {
+				glDrawArrays(GL_TRIANGLES, 0, 3);
+			}
 		}
 	};
 
@@ -234,32 +527,33 @@ namespace gfx {
 			glClear(clearBits);
 		}
 
-		void _recurseScene(Object3d *obj, int depth = 0) {
+		void _recurseProjectScene(Object3d *obj, int depth = 0) {
 			obj->updateTransform();
-			
-			math::Vector3 pos = obj->localToWorld(math::Vector3(0, 0, 0));
-			for (int i = 0; i < depth; ++i) printf("  ");
-			printf("%08x: %d %d", obj, obj->type(), obj->_transformNeedsUpdate ? 1 : 0);
-			for (int i = 0; i < 4-depth; ++i) printf("  ");
-			printf("L:(%.2f, %.2f, %.2f) W:(%.2f, %.2f, %.2f)\n",
-				obj->_position.x(), obj->_position.y(), obj->_position.z(),
-				pos.x(), pos.y(), pos.z());
+		 
+			for (auto& i : obj->_children) {
+				_recurseProjectScene(i, depth + 1);
+			}
+		}
 
+		void _recurseRenderScene(Object3d *obj, int depth = 0) {
 			if (obj->type() == ObjectType::Mesh) {
 				auto mesh = reinterpret_cast<Mesh*>(obj);
-				printf("Mesh: %08x %08x\n", mesh->_geometry, mesh->_material);
-				for (auto i : mesh->_geometry->_attributes) {
-					printf("Attrib: %s (%d)\n", i.first.c_str(), i.second->_data.size());
-				}
+				modelViewMatrix = mesh->_worldMatrix * viewMatrix;
+				mesh->render();
 			}
 
 			for (auto& i : obj->_children) {
-				_recurseScene(i, depth + 1);
+				_recurseRenderScene(i, depth + 1);
 			}
 		}
 
 		void render(Scene *scene, Camera *camera) {
-			_recurseScene(scene);
+			projMatrix.setIdentity();
+			//projMatrix = camera->_projMatrix;
+			viewMatrix = camera->_worldMatrix.inverse();
+
+			_recurseProjectScene(scene);
+			_recurseRenderScene(scene);
 		}
 	}
 }

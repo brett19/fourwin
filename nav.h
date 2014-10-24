@@ -68,6 +68,19 @@ Handle<String> NavNew(const char* str) {
 	return NavNew<String>(str);
 }
 
+Handle<Number> NavNew(float value) {
+	return NavNew<Number>(value);
+}
+Handle<Number> NavNew(double value) {
+	return NavNew<Number>(value);
+}
+Handle<Integer> NavNew(int32_t value) {
+	return NavNew<Integer>(value);
+}
+Handle<Integer> NavNew(uint32_t value) {
+	return NavNew<Integer>(value);
+}
+
 Handle<Value> NavNull() {
 	return v8::Null(v8::Isolate::GetCurrent());
 }
@@ -106,6 +119,10 @@ void NavSetObjVal(Handle<Object>& obj, const char* name, T val, PropertyAttribut
 template<typename T>
 void NavSetObjFunc(Handle<Object>& obj, const char* name, T func, PropertyAttribute attribs) {
 	NavSetObjVal(obj, name, FunctionTemplate::New(gIsolate, func)->GetFunction(), attribs);
+}
+template<typename T>
+void NavSetObjEnumVal(Handle<Object>& obj, const char* name, T val) {
+	obj->Set(NavNew(name), NavNew((std::underlying_type<T>::type)val));
 }
 template<typename T>
 void NavSetProtoVal(Handle<FunctionTemplate>& tpl, const char *name, T val) {
@@ -285,7 +302,7 @@ private:
 template<typename T, typename V, typename R, R(Value::*F)() const>
 class NavBinder {
 public:
-	void Bind(Handle<Object> obj, const char* propName, T* value, std::function<void()> handler) {
+	void Bind(Handle<Object> obj, const char* propName, T* value, std::function<void()> handler=nullptr) {
 		_value = value;
 		_handler = handler;
 		obj->SetAccessor(NavNew(propName), [](Local<String> property, const PropertyCallbackInfo<Value>& info) {
@@ -302,7 +319,9 @@ private:
 	std::function<void()> _handler;
 	void _Changed(T value) {
 		*_value = value;
-		_handler();
+		if (_handler) {
+			_handler();
+		}
 	}
 };
 typedef NavBinder<float, Number, double, &Value::NumberValue> FloatBinder;

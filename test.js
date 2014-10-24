@@ -106,51 +106,53 @@ verts.needsUpdate = true;
 geom.setAttribute('position', verts);
 
 var vshader = [
-    'attribute vec4 vPosition;',
+    'attribute vec3 vPosition;',
+    'uniform mat4 mModelView;',
+    'uniform mat4 mProjection;',
     'void main()',
     '{',
-    '  gl_Position = vPosition;',
+    '  gl_Position = mProjection * mModelView * vec4(vPosition, 1);',
     '}'
 ];
 var fshader = [
     'precision mediump float;',
     'void main()',
     '{',
-    '  glFragColor = vec4(1.0, 0.0, 0.0, 1.0)',
+    '  gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);',
     '}'
 ];
-
-FOUR.AttribType = {
-    Vector3: 2
-};
 
 // Immutable once created
 var shader = new FOUR.Shader({
     vertex: vshader.join('\n'),
     fragment: fshader.join('\n'),
     attributes: {
-        'position': FOUR.AttribType.Vector3
+        'position': FOUR.AttributeType.Vector3
+    },
+    uniforms: {
+        'mModelView': FOUR.UniformType.MatrixModelView,
+        'mProjection': FOUR.UniformType.MatrixProjection
     }
 });
 
-// Shader is not changable
+// Shader is immutable, other properties are not
 var mat = new FOUR.ShaderMaterial(shader);
 mat.transparent = true;
 mat.depthWrite = true;
 mat.depthTest = true;
 
 var mesh = new FOUR.Mesh(geom, mat);
+mesh.position.x = 0.75;
 
 var WIN_WIDTH = 1920/2;
 var WIN_HEIGHT = 1080/2;
 var cam = new FOUR.Camera();
 cam.name = 'test-camera';
 cam.setPerspective(45.0, WIN_WIDTH/WIN_HEIGHT, 0.1, 100.0);
+cam.position.x = 0.5;
 
 var trs = new FOUR.Object3d();
 trs.name = 'test-object';
-trs.position.x = 4;
-trs.position.y = 2;
 trs.add(mesh);
 
 var scene = new FOUR.Scene();
