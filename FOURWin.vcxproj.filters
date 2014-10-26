@@ -48,6 +48,12 @@
     <ClInclude Include="uvpp.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="iothread.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="uvhttp.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="stdafx.cpp">

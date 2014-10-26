@@ -107,6 +107,10 @@ namespace uvpp {
 			uv_run(&_loop, UV_RUN_ONCE);
 		}
 
+		void stop() {
+			uv_stop(&_loop);
+		}
+
 	protected:
 		uv_loop_t _loop;
 

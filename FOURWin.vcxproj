@@ -89,7 +89,9 @@
   <ItemGroup>
     <ClInclude Include="Four.h" />
     <ClInclude Include="gfx.h" />
+    <ClInclude Include="uvhttp.h" />
     <ClInclude Include="http_parser.h" />
+    <ClInclude Include="iothread.h" />
     <ClInclude Include="math.h" />
     <ClInclude Include="nav.h" />
     <ClInclude Include="objectwrap.h" />

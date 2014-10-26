@@ -31,7 +31,8 @@ var jsindices = [
 console.log('Starting Script!');
 
 FOUR.io.load('http://localhost:80/', function(err, res) {
-    console.log('res', err, res);
+    var x = new Uint8Array(res);
+    console.log('res', err, x);
 });
 
 /*

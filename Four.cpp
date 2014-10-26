@@ -3,589 +3,12 @@
 #include "nav.h"
 #include "math.h"
 #include "gfx.h"
-#include "uvpp.h"
+#include "iothread.h"
+#include "uvhttp.h"
 
 using namespace v8; 
 
 std::vector<PersistentHandleWrapper<Function>> gAnimCallbacks;
-
-namespace http {
-	struct Response {
-		uint32_t statusCode;
-		std::vector<std::pair<std::string, std::string>> headers;
-		std::vector<uint8_t> body;
-	};
-
-	class ResponseParser {
-	public:
-		ResponseParser() {
-			http_parser_init(&_parser, HTTP_RESPONSE);
-			_parser.data = this;
-			_settings.on_message_begin = &_parserCb < &ResponseParser::_onMessageBegin > ;
-			_settings.on_url = &_parserCb < &ResponseParser::_onUrl > ;
-			_settings.on_status = &_parserCb < &ResponseParser::_onStatus > ;
-			_settings.on_header_field = &_parserCb < &ResponseParser::_onHeaderField > ;
-			_settings.on_header_value = &_parserCb < &ResponseParser::_onHeaderValue > ;
-			_settings.on_headers_complete = &_parserCb < &ResponseParser::_onHeadersComplete > ;
-			_settings.on_body = &_parserCb < &ResponseParser::_onBody > ;
-			_settings.on_message_complete = &_parserCb < &ResponseParser::_onMessageComplete > ;
-		}
-
-		void parse(const char *data, size_t len) {
-			http_parser_execute(&_parser, &_settings, data, len);
-		}
-
-		void finish() {
-			http_parser_execute(&_parser, &_settings, nullptr, 0);
-		}
-
-		virtual void onComplete(const Response& response) {
-			printf("HttpResponseParser::onComplete\n");
-		}
-
-		virtual void onError(uint32_t code) {
-			printf("HttpResponseParser::onError(%d)\n", code);
-		}
-
-	private:
-		enum class HeaderState : uint32_t {
-			Name,
-			Value
-		};
-
-		template<int(ResponseParser::*F)()>
-		static int _parserCb(http_parser *parser) {
-			return (((ResponseParser*)parser->data)->*F)();
-		}
-		template<int(ResponseParser::*F)(const char*, size_t)>
-		static int _parserCb(http_parser *parser, const char *at, size_t length) {
-			return (((ResponseParser*)parser->data)->*F)(at, length);
-		}
-
-		int _onMessageBegin() {
-			return 0;
-		}
-		int _onUrl(const char *at, size_t len) {
-			return 0;
-		}
-		int _onStatus(const char *at, size_t len) {
-			_response.statusCode = _parser.status_code;
-			return 0;
-		}
-		int _onHeaderField(const char *at, size_t len) {
-			if (_headerState == HeaderState::Value) {
-				_response.headers.emplace_back(_headerName, _headerValue);
-				_headerName.resize(0);
-				_headerValue.resize(0);
-			}
-			_headerName += std::string(at, len);
-			_headerState = HeaderState::Name;
-			return 0;
-		}
-		int _onHeaderValue(const char *at, size_t len) {
-			_headerValue += std::string(at, len);
-			_headerState = HeaderState::Value;
-			return 0;
-		}
-		int _onHeadersComplete() {
-			if (_headerState == HeaderState::Value) {
-				_response.headers.emplace_back(_headerName, _headerValue);
-				_headerName.resize(0);
-				_headerValue.resize(0);
-			}
-
-			return 0;
-		}
-		int _onBody(const char *at, size_t len) {
-			size_t offset = _response.body.size();
-			_response.body.resize(offset + len);
-			memcpy(&_response.body[offset], at, len);
-			return 0;
-		}
-		int _onMessageComplete() {
-			this->onComplete(_response);
-			_response = Response();
-			return 0;
-		}
-
-		http_parser _parser;
-		http_parser_settings _settings;
-		Response _response;
-		HeaderState _headerState;
-		std::string _headerName;
-		std::string _headerValue;
-
-	};
-
-	class Socket : public uvpp::TcpSocket {
-	public:
-		Socket(uvpp::EventLoop& loop)
-			: TcpSocket(loop), _parser(*this) {
-		}
-
-		void request(const std::string& host, const std::string& path) {
-			std::string out;
-			out += "GET " + path + " HTTP/1.1\r\n";
-			out += "Host: " + host + "\r\n";
-			out += "\r\n";
-			send(out.c_str(), out.size());
-		}
-
-		virtual void onConnect() override {
-			printf("HttpSocket::onConnect\n");
-		}
-
-		virtual void onClose() override {
-			printf("HttpSocket::onClose\n");
-			_parser.finish();
-		}
-
-		virtual void onResponse(const Response& response) {
-			printf("HttpSocket::onResponse()\n");
-		}
-
-		virtual void onError(uint32_t code) override {
-			printf("HttpSocket::onError(%d)\n", code);
-		}
-
-	private:
-		virtual void onRecv(const char *data, size_t len) override {
-			printf("HttpSocket::onRecv(%p, %d)\n", data, len);
-			_parser.parse(data, len);
-		}
-
-		class _ResponseParser : public ResponseParser {
-		public:
-			_ResponseParser(Socket& owner)
-				: _owner(owner) {
-			}
-			void onComplete(const Response& response) override {
-				_owner.onResponse(response);
-			}
-			void onError(uint32_t code) override {
-				_owner.onError(code);
-			}
-		private:
-			Socket& _owner;
-		};
-
-		std::string _uri;
-		_ResponseParser _parser;
-
-	};
-}
-
-namespace iothread {
-	class WorkerRequest {
-	public:
-		virtual void execute() = 0;
-		virtual void onComplete() = 0;
-
-	};
-
-	class _WorkerThread : public uvpp::Thread {
-		friend class WorkerRequest;
-
-	public:
-		_WorkerThread()
-			: _signalEvent(*this, _eventLoop) {
-		}
-
-		void dispatch(WorkerRequest *request) {
-			{
-				uvpp::ScopedLock lock(_inMutex);
-				_requestsIn.push_back(request);
-			}
-			_signalEvent.signal();
-		}
-
-		void poll() {
-			std::vector<WorkerRequest*> requests;
-			{
-				uvpp::ScopedLock lock(_outMutex);
-				requests = std::move(_requestsOut);
-			}
-
-			for (auto& i : requests) {
-				i->onComplete();
-			}
-		}
-
-		uvpp::EventLoop& loop() {
-			return _eventLoop;
-		}
-
-		void _dispatchCompletion(WorkerRequest *request) {
-			uvpp::ScopedLock lock(_outMutex);
-			_requestsOut.push_back(request);
-		}
-
-	private:
-		void threadExec() override {
-			_eventLoop.run();
-		}
-
-		void _grabRequests() {
-			std::vector<WorkerRequest*> requests;
-			{
-				uvpp::ScopedLock lock(_inMutex);
-				requests = std::move(_requestsIn);
-			}
-			for (auto& i : requests) {
-				i->execute();
-			}
-		}
-
-		class _NewRequestEvent : public uvpp::Event {
-		public:
-			_NewRequestEvent(_WorkerThread& owner, uvpp::EventLoop& loop)
-				: uvpp::Event(loop), _owner(owner) {
-			}
-			virtual void onSignal() {
-				_owner._grabRequests();
-			}
-		private:
-			_WorkerThread& _owner;
-		};
-
-		uvpp::EventLoop _eventLoop;
-		uvpp::Mutex _inMutex;
-		uvpp::Mutex _outMutex;
-		_NewRequestEvent _signalEvent;
-		std::vector<class WorkerRequest*> _requestsIn;
-		std::vector<class WorkerRequest*> _requestsOut;
-
-	};
-	_WorkerThread *_thread = nullptr;
-
-	void Init() {
-		_thread = new _WorkerThread();
-		_thread->start();
-	}
-
-	void Shutdown() {
-	}
-
-	void dispatch(WorkerRequest *request) {
-		_thread->dispatch(request);
-	}
-
-	void poll() {
-		_thread->poll();
-	}
-
-	class UriRequest : public WorkerRequest {
-	public:
-		UriRequest(const std::string& uri)
-			: _proc(nullptr) {
-		}
-
-	protected:
-		int32_t _errorCode;
-		http::Response _response;
-
-	private:
-		class HttpProc : http::Socket {
-		public:
-			HttpProc(UriRequest& owner, const std::string& host, uint16_t port, const std::string& path)
-				: http::Socket(_thread->loop()), _owner(owner), _host(host), _port(port), _path(path) {
-			}
-			void start() {
-				connect(_host, _port);
-			}
-			virtual void onConnect() override {
-				request(_host, _path);
-			}
-			virtual void onResponse(const http::Response& response) {
-				_owner.onComplete(response);
-			}
-			virtual void onError(uint32_t code) override {
-				_owner.onError(code);
-			}
-		private:
-			UriRequest& _owner;
-			std::string _host;
-			uint16_t _port;
-			std::string _path;
-		};
-		HttpProc *_proc;
-
-		void execute() override {
-			printf("HttpProc execute\n");
-			_proc = new HttpProc(*this, "127.0.0.1", 80, "/");
-			_proc->start();
-		}
-
-		virtual void onComplete(const http::Response& response) {
-			_errorCode = 0;
-			_response = response;
-			_thread->_dispatchCompletion(this);
-		}
-
-		virtual void onError(int32_t code) {
-			_errorCode = code;
-			_thread->_dispatchCompletion(this);
-		}
-
-	};
-
-
-
-	/*
-	class Request;
-	void _publishComplete(Request *req);
-	
-	uv_loop_t _uvLoop;
-	uv_thread_t _uvThread;
-	uv_async_t _uvAsync;
-	uv_mutex_t _uvMutexIn;
-	uv_mutex_t _uvMutexOut;
-	std::vector<class Request*> _requestsIn;
-	std::vector<class Request*> _requestsOut;
-
-	class Request {
-	public:
-		enum class HeaderState : uint32_t {
-			Name,
-			Value
-		};
-
-		std::string reqPath;
-		uv_tcp_t _uvConn;
-		http_parser _parser;
-		http_parser_settings _parserSettings;
-		std::string host;
-		int port;
-		std::string path;
-		std::string reqData;
-		unsigned int respStatus;
-		std::vector<std::pair<std::string, std::string>> respHeaders;
-		std::vector<uint8_t> respData;
-		HeaderState _curHeaderState;
-		std::string _curHeaderName;
-		std::string _curHeaderValue;
-
-		static void _uvAllocCb(uv_handle_t* handle, size_t suggested_size, uv_buf_t* buf) {
-			buf->base = new char[suggested_size];
-			buf->len = suggested_size;
-		}
-
-		static void _uvConnectCb(uv_connect_t *req, int status) {
-			((Request*)req->data)->_onConnect(req, status);
-		}
-
-		static void _uvReadCb(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
-			((Request*)stream->data)->_onRead(nread, buf->base);
-			if (nread == UV_EOF) {
-				uv_close((uv_handle_t*)stream, nullptr);
-			}
-		}
-
-		static void _uvWriteCb(uv_write_t *req, int status) {
-			delete req;
-		}
-
-		void _onConnect(uv_connect_t *req, int status) {
-			if (status == -1) {
-				printf("CONNECT ERROR\n");
-				return;
-			}
-
-			uv_read_start(req->handle, _uvAllocCb, _uvReadCb);
-
-			reqData = _buildRequest();
-
-			uv_buf_t buf;
-			buf.base = (char*)reqData.c_str();
-			buf.len = reqData.size();
-
-			uv_write_t *wreq = new uv_write_t;
-			uv_write(wreq, req->handle, &buf, 1, _uvWriteCb);
-		}
-
-		void _onRead(ssize_t nread, char *buf) {
-			if (nread == UV_EOF) {
-				nread = 0;
-			}
-			size_t pread = http_parser_execute(&_parser, &_parserSettings, buf, nread);
-			if (pread != nread) {
-				printf("Parser error\n");
-			}
-			delete buf;
-		}
-
-		std::string _buildRequest() {
-			std::string res;
-			res += "GET " + path + " HTTP/1.1\r\n";
-			res += "Host: " + host + "\r\n";
-			res += "\r\n";
-			return res;
-		}
-
-		template<int(Request::*F)()>
-		static int _parserCb(http_parser *parser) {
-			return (((Request*)parser->data)->*F)();
-		}
-		template<int(Request::*F)(const char*, size_t)>
-		static int _parserCb(http_parser *parser, const char *at, size_t length) {
-			return (((Request*)parser->data)->*F)(at, length);
-		}
-
-		int _parserOnMessageBegin() {
-			_curHeaderState = HeaderState::Name;
-			return 0;
-		}
-		int _parserOnUrl(const char *at, size_t len) {
-			return 0;
-		}
-		int _parserOnStatus(const char *at, size_t len) {
-			respStatus = _parser.status_code;
-			return 0;
-		}
-		int _parserOnHeaderField(const char *at, size_t len) {
-			if (_curHeaderState == HeaderState::Value) {
-				respHeaders.emplace_back(_curHeaderName, _curHeaderValue);
-				_curHeaderName.resize(0);
-				_curHeaderValue.resize(0);
-			}
-			_curHeaderName += std::string(at, len);
-			_curHeaderState = HeaderState::Name;
-			return 0;
-		}
-		int _parserOnHeaderValue(const char *at, size_t len) {
-			_curHeaderValue += std::string(at, len);
-			_curHeaderState = HeaderState::Value;
-			return 0;
-		}
-		int _parserOnHeadersComplete() {
-			if (_curHeaderState == HeaderState::Value) {
-				respHeaders.emplace_back(_curHeaderName, _curHeaderValue);
-				_curHeaderName.resize(0);
-				_curHeaderValue.resize(0);
-			}
-
-			return 0;
-		}
-		int _parserOnBody(const char *at, size_t len) {
-			size_t offset = respData.size();
-			respData.resize(offset + len);
-			memcpy(&respData[offset], at, len);
-			return 0;
-		}
-		int _parserOnMessageComplete() {
-			printf("Message Complete\n");
-			_publishComplete(this);
-			return 0;
-		}
-
-		void Start() {
-			printf("Request Start\n");
-
-			http_parser_url url;
-			http_parser_parse_url(reqPath.c_str(), reqPath.size(), 0, &url);
-
-			std::string urlHost = "";
-			uint16_t urlPort;
-			std::string urlPath = "/";
-			if (url.field_set & (1 << UF_HOST)) {
-				auto& hostField = url.field_data[UF_HOST];
-				urlHost = std::string(&reqPath[hostField.off], hostField.len);
-			}
-			if (url.field_set & (1 << UF_PORT)) {
-				urlPort = url.port;
-			}
-			if (url.field_set & (1 << UF_PATH)) {
-				auto& pathField = url.field_data[UF_PATH];
-				urlPath = std::string(&reqPath[pathField.off], pathField.len);
-			}
-
-			_parserSettings.on_message_begin = &_parserCb<&Request::_parserOnMessageBegin>;
-			_parserSettings.on_url = &_parserCb<&Request::_parserOnUrl>;
-			_parserSettings.on_status = &_parserCb<&Request::_parserOnStatus>;
-			_parserSettings.on_header_field = &_parserCb<&Request::_parserOnHeaderField>;
-			_parserSettings.on_header_value = &_parserCb<&Request::_parserOnHeaderValue>;
-			_parserSettings.on_headers_complete = &_parserCb<&Request::_parserOnHeadersComplete>;
-			_parserSettings.on_body = &_parserCb<&Request::_parserOnBody>;
-			_parserSettings.on_message_complete = &_parserCb<&Request::_parserOnMessageComplete>;
-
-			http_parser_init(&_parser, HTTP_RESPONSE);
-			_parser.data = this;
-
-			uv_tcp_init(&_uvLoop, &_uvConn);
-			_uvConn.data = (void*)this;
-
-			uv_connect_t *conn= new uv_connect_t;
-			conn->data = this;
-
-			struct sockaddr_in bindAddr;
-			uv_ip4_addr(host.c_str(), port, &bindAddr);
-			
-			uv_tcp_connect(conn, &_uvConn, (const sockaddr*)&bindAddr, &_uvConnectCb);
-		}
-
-		void Complete() {
-			printf("Request Complete\n");
-		}
-
-	};
-
-	static void _uvAsyncCb(uv_async_t* handle) {
-		std::vector<Request*> requests;
-		uv_mutex_lock(&_uvMutexIn);
-		requests = std::move(_requestsIn);
-		uv_mutex_unlock(&_uvMutexIn);
-
-		for (auto& i : requests) {
-			i->Start();
-		}
-	}
-
-	void _uvThreadCb(void* arg) {
-		while (true) {
-			uv_run(&_uvLoop, UV_RUN_DEFAULT);
-			printf("UV LOOP EXITED\n");
-			Sleep(100);
-		}
-	}
-
-	void _publishComplete(Request *req) {
-		uv_mutex_lock(&_uvMutexOut);
-		_requestsOut.push_back(req);
-		uv_mutex_unlock(&_uvMutexOut);
-	}
-
-	void Send(Request *req) {
-		uv_mutex_lock(&_uvMutexIn);
-		_requestsIn.push_back(req);
-		uv_mutex_unlock(&_uvMutexIn);
-		uv_async_send(&_uvAsync);
-	}
-
-	void Poll() {
-		std::vector<Request*> requests;
-
-		uv_mutex_lock(&_uvMutexOut);
-		requests = std::move(_requestsOut);
-		uv_mutex_unlock(&_uvMutexOut);
-
-		for (auto& i : requests) {
-			i->Complete();
-			delete i;
-		}
-	}
-
-	void Init() {
-		uv_loop_init(&_uvLoop);
-		uv_mutex_init(&_uvMutexIn);
-		uv_mutex_init(&_uvMutexOut);
-		uv_async_init(&_uvLoop, &_uvAsync, _uvAsyncCb);
-		uv_thread_create(&_uvThread, _uvThreadCb, nullptr);
-	}
-
-	void Shutdown() {
-	}
-	*/
-}
 
 namespace js {
 	namespace Console {
@@ -1048,18 +471,29 @@ namespace js {
 		namespace io {
 			class UriRequest : public iothread::UriRequest {
 			public:
-				UriRequest(const std::string& uri, PersistentHandleWrapper<Function> callback)
-					: iothread::UriRequest(uri), _callback(callback) {
+				UriRequest(bool asText, const std::string& uri, PersistentHandleWrapper<Function> callback)
+					: iothread::UriRequest(uri), _isDispatched(false), _asText(asText), _callback(callback) {
 				}
 
 			private:
 				void _invokeCallback(uint32_t error, const char *data, size_t len) {
+					if (_isDispatched) {
+						return;
+					}
+					_isDispatched = true;
+
 					HandleScope handleScope(gIsolate);
 					Handle<Function> callback = _callback.Extract();
 					Handle<Value> args[2];
 					if (error == 0) {
 						args[0] = NavNull();
-						args[1] = NavNew(data, len);
+						if (_asText) {
+							args[1] = NavNew(data, len);
+						} else {
+							auto buf = NavNew<ArrayBuffer>(len);
+							memcpy(buf->BaseAddress(), data, len);
+							args[1] = buf;
+						}
 					} else {
 						args[0] = NavNew<Integer>(error);
 						args[1] = NavNull();
@@ -1079,10 +513,13 @@ namespace js {
 					_invokeCallback(code, nullptr, 0);
 				}
 
+				bool _isDispatched;
+				bool _asText;
 				PersistentHandleWrapper<Function> _callback;
 
 			};
-			void load(const v8::FunctionCallbackInfo<v8::Value>& args) {
+
+			void _load(bool asText, const v8::FunctionCallbackInfo<v8::Value>& args) {
 				if (args.Length() < 2) {
 					return;
 				}
@@ -1090,13 +527,22 @@ namespace js {
 				String::Utf8Value hostStr(args[0]);
 				PersistentHandleWrapper<Function> callback(gIsolate, args[1].As<Function>());
 
-				auto req = new UriRequest(*hostStr, callback);
+				auto req = new UriRequest(asText, *hostStr, callback);
 				iothread::dispatch(req);
+			}
+			
+			void load(const v8::FunctionCallbackInfo<v8::Value>& args) {
+				return _load(false, args);
+			}
+
+			void loadString(const v8::FunctionCallbackInfo<v8::Value>& args) {
+				return _load(true, args);
 			}
 
 			void Init(Handle<Object> targetObj) {
 				Handle<Object> ioObj = NavNew<Object>();
 				NavSetObjFunc(ioObj, "load", load);
+				NavSetObjFunc(ioObj, "loadString", loadString);
 				NavSetObjVal(targetObj, "io", ioObj);
 			}
 
