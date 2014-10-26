@@ -13,6 +13,9 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="http_parser">
+      <UniqueIdentifier>{b0093ab5-7ce5-4a91-8aab-6f5f606b0169}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="stdafx.h">
@@ -39,6 +42,12 @@
     <ClInclude Include="gfx.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="http_parser.h">
+      <Filter>http_parser</Filter>
+    </ClInclude>
+    <ClInclude Include="uvpp.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="stdafx.cpp">
@@ -49,6 +58,9 @@
     </ClCompile>
     <ClCompile Include="Four.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="http_parser.c">
+      <Filter>http_parser</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

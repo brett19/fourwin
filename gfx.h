@@ -183,9 +183,9 @@ namespace gfx {
 		}
 
 		void initVars() {
-			GLuint location = 0;
+			GLint location = 0;
 			for (auto& i : attributes) {
-				GLuint attribLoc = location++;
+				GLint attribLoc = location++;
 				_locations.emplace(i.name, AttributeBindInfo(attribLoc));
 			}
 
@@ -308,11 +308,15 @@ namespace gfx {
 		}
 
 		bool bindVars() {
+			for (auto& i : _locations) {
+				GLint location = glGetAttribLocation(_program, i.first.c_str());
+				if (location != i.second.location) {
+					printf("Attribute bound to wrong location...\n");
+					i.second.location = -1;
+				}
+			}
 			for (auto& i : _uniformInfo) {
 				GLint location = glGetUniformLocation(_program, i.first.c_str());
-				if (location == -1) {
-					return false;
-				}
 				i.second.location = location;
 			}
 			return true;
@@ -349,24 +353,26 @@ namespace gfx {
 				bool bindSuccess = true;
 				for (auto& i : _uniformInfo) {
 					const UniformBindInfo& bindInfo = i.second;
-					if (bindInfo.type == UniformType::Vector2) {
-						glUniform2fv(bindInfo.location, 1, (GLfloat*)bindInfo.data);
-					} else if (bindInfo.type == UniformType::Vector3) {
-						glUniform3fv(bindInfo.location, 1, (GLfloat*)bindInfo.data);
-					} else if (bindInfo.type == UniformType::Vector4) {
-						glUniform4fv(bindInfo.location, 1, (GLfloat*)bindInfo.data);
-					} else if (bindInfo.type == UniformType::Matrix3) {
-						glUniformMatrix3fv(bindInfo.location, 1, false, (GLfloat*)bindInfo.data);
-					} else if (bindInfo.type == UniformType::Matrix4) {
-						glUniformMatrix4fv(bindInfo.location, 1, false, (GLfloat*)bindInfo.data);
-					} else if (bindInfo.type == UniformType::MatrixProjection) {
-						glUniformMatrix4fv(bindInfo.location, 1, false, (GLfloat*)Renderer::projMatrix.data());
-					} else if (bindInfo.type == UniformType::MatrixModelView) {
-						glUniformMatrix4fv(bindInfo.location, 1, false, (GLfloat*)Renderer::modelViewMatrix.data());
-					} else {
-						printf("Encountered unknown uniform bind type.\n");
-						bindSuccess = false;
-						break;
+					if (bindInfo.location != -1) {
+						if (bindInfo.type == UniformType::Vector2) {
+							glUniform2fv(bindInfo.location, 1, (GLfloat*)bindInfo.data);
+						} else if (bindInfo.type == UniformType::Vector3) {
+							glUniform3fv(bindInfo.location, 1, (GLfloat*)bindInfo.data);
+						} else if (bindInfo.type == UniformType::Vector4) {
+							glUniform4fv(bindInfo.location, 1, (GLfloat*)bindInfo.data);
+						} else if (bindInfo.type == UniformType::Matrix3) {
+							glUniformMatrix3fv(bindInfo.location, 1, false, (GLfloat*)bindInfo.data);
+						} else if (bindInfo.type == UniformType::Matrix4) {
+							glUniformMatrix4fv(bindInfo.location, 1, false, (GLfloat*)bindInfo.data);
+						} else if (bindInfo.type == UniformType::MatrixProjection) {
+							glUniformMatrix4fv(bindInfo.location, 1, false, (GLfloat*)Renderer::projMatrix.data());
+						} else if (bindInfo.type == UniformType::MatrixModelView) {
+							glUniformMatrix4fv(bindInfo.location, 1, false, (GLfloat*)Renderer::modelViewMatrix.data());
+						} else {
+							printf("Encountered unknown uniform bind type.\n");
+							bindSuccess = false;
+							break;
+						}
 					}
 				}
 				if (bindSuccess) {
@@ -376,12 +382,13 @@ namespace gfx {
 						auto foundLoc = _locations.find(i.first);
 						if (foundLoc != _locations.end()) {
 							const AttributeBindInfo& bindInfo = foundLoc->second;
-
-							if (!attrib->bind(bindInfo.location)) {
-								bindSuccess = false;
-								break;
+							if (bindInfo.location != -1) {
+								if (!attrib->bind(bindInfo.location)) {
+									bindSuccess = false;
+									break;
+								}
+								glEnableVertexAttribArray(bindInfo.location);
 							}
-							glEnableVertexAttribArray(bindInfo.location);
 						}
 					}
 				}
@@ -394,7 +401,7 @@ namespace gfx {
 			AttributeBindInfo(GLuint location_)
 				: location(location_) {}
 
-			GLuint location;
+			GLint location;
 		};
 		struct UniformBindInfo {
 			UniformBindInfo(UniformType type_)
@@ -402,7 +409,7 @@ namespace gfx {
 				memset(data, 0, sizeof(data));
 			}
 
-			GLuint location;
+			GLint location;
 			UniformType type;
 			uint8_t data[4 * 16];
 		};
@@ -432,13 +439,11 @@ namespace gfx {
 		}
 
 		bool bind() {
-			printf("ShaderMaterial::bind\n");
 			_bind();
 			return _shader->bind();
 		}
 
 		bool bindFor(BufferGeometry* geom) {
-			printf("ShaderMaterial::bindFor\n");
 			_bind();
 			return _shader->bindFor(geom);
 		}

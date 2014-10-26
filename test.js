@@ -30,6 +30,10 @@ var jsindices = [
 
 console.log('Starting Script!');
 
+FOUR.io.load('http://localhost:80/', function(err, res) {
+    console.log('res', err, res);
+});
+
 /*
 var x = new FOUR.Object3d(); x.name = "x";
 var a = new FOUR.Object3d(); a.name = "a";
@@ -96,6 +100,12 @@ var jstris = [
     0.5, -0.5, 0.0
 ];
 
+var jscolors = [
+  1.0, 0.0, 0.0, 1.0,
+    0.0, 1.0, 0.0, 1.0,
+    0.0, 0.0, 1.0, 1.0
+];
+
 var geom = new FOUR.BufferGeometry();
 geom.name = 'test-geometry';
 var verts = new FOUR.BufferAttribute(new Float32Array(jstris.length), 3);
@@ -104,21 +114,31 @@ for (var i = 0; i < jstris.length; ++i) {
 }
 verts.needsUpdate = true;
 geom.setAttribute('position', verts);
+var colors = new FOUR.BufferAttribute(new Float32Array(jscolors.length), 4);
+for (var i = 0; i < jscolors.length; ++i) {
+    colors.data[i] = jscolors[i];
+}
+colors.needsUpdate = true;
+geom.setAttribute('color', colors);
 
 var vshader = [
-    'attribute vec3 vPosition;',
+    'attribute vec3 position;',
+    'attribute vec4 color;',
+    'varying vec4 vColor;',
     'uniform mat4 mModelView;',
     'uniform mat4 mProjection;',
     'void main()',
     '{',
-    '  gl_Position = mProjection * mModelView * vec4(vPosition, 1);',
+    '  vColor = color;',
+    '  gl_Position = mProjection * mModelView * vec4(position, 1);',
     '}'
 ];
 var fshader = [
     'precision mediump float;',
+    'varying vec4 vColor;',
     'void main()',
     '{',
-    '  gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);',
+    '  gl_FragColor = vColor;',
     '}'
 ];
 
@@ -127,7 +147,8 @@ var shader = new FOUR.Shader({
     vertex: vshader.join('\n'),
     fragment: fshader.join('\n'),
     attributes: {
-        'position': FOUR.AttributeType.Vector3
+        'position': FOUR.AttributeType.Vector3,
+        'color': FOUR.AttributeType.Vector4
     },
     uniforms: {
         'mModelView': FOUR.UniformType.MatrixModelView,

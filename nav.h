@@ -54,10 +54,13 @@ template<>
 Handle<String> NavNew<String>() {
 	return String::Empty(v8::Isolate::GetCurrent());
 }
-
 template<>
 Handle<String> NavNew<String>(const char* str) {
 	return String::NewFromUtf8(v8::Isolate::GetCurrent(), str);
+}
+template<>
+Handle<String> NavNew<String>(const char* str, size_t len) {
+	return String::NewFromUtf8(v8::Isolate::GetCurrent(), str, String::kNormalString, len);
 }
 
 template<size_t N>
@@ -68,6 +71,9 @@ Handle<String> NavNew(const char* str) {
 	return NavNew<String>(str);
 }
 
+Handle<String> NavNew(const char* str, size_t len) {
+	return NavNew<String>(str, len);
+}
 Handle<Number> NavNew(float value) {
 	return NavNew<Number>(value);
 }
