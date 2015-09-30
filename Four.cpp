@@ -257,7 +257,7 @@ namespace js {
 		public:
 			NAV_CLASS_WRAPPER(gfx::Shader)
 
-				static void buildPrototype(Handle<FunctionTemplate> tpl) {
+			static void buildPrototype(Handle<FunctionTemplate> tpl) {
 			}
 
 			void constructor(const v8::FunctionCallbackInfo<v8::Value>& args) {
